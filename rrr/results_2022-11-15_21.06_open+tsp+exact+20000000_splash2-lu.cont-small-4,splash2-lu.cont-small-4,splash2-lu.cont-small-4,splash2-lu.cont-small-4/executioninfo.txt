@@ -1,5 +1,0 @@
-started:    2022-11-15 22:46:58
-ended:      2022-11-15 22:58:19
-duration:   0:11:21.087310
-host:       79be8648a958
-tasks:      splash2-lu.cont-small-4,splash2-lu.cont-small-4,splash2-lu.cont-small-4,splash2-lu.cont-small-4

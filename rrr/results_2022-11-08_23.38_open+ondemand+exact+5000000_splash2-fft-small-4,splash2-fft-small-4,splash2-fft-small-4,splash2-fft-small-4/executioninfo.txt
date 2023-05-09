@@ -1,5 +1,0 @@
-started:    2022-11-09 02:27:29
-ended:      2022-11-09 02:35:48
-duration:   0:08:18.857871
-host:       13249be897e0
-tasks:      splash2-fft-small-4,splash2-fft-small-4,splash2-fft-small-4,splash2-fft-small-4
