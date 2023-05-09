@@ -1,5 +1,0 @@
-started:    2022-07-07 22:30:47
-ended:      2022-07-07 23:55:50
-duration:   1:25:03.586195
-host:       d509827f5fed
-tasks:      parsec-bodytrack-simsmall-2,parsec-bodytrack-simsmall-2,parsec-bodytrack-simsmall-2,parsec-bodytrack-simsmall-2

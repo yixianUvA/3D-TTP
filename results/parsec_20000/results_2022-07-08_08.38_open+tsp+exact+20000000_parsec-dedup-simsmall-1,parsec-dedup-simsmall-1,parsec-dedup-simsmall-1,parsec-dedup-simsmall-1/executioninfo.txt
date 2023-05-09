@@ -1,5 +1,0 @@
-started:    2022-07-08 08:38:57
-ended:      2022-07-08 17:06:26
-duration:   8:27:29.303353
-host:       11de0cf8e290
-tasks:      parsec-dedup-simsmall-1,parsec-dedup-simsmall-1,parsec-dedup-simsmall-1,parsec-dedup-simsmall-1
