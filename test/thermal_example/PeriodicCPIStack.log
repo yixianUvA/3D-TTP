@@ -1,0 +1,57 @@
+Metric	Core0	Core1	Core2	Core3
+total	0.334	3600000.920	3600000.920	3600000.920
+base	0.250	0.000	0.000	0.000
+dispatch_width	-
+rs_full	-
+depend	-
+depend-int	0.009	0.000	0.000	0.000
+depend-fp	-
+depend-branch	-
+issue	0.016	0.000	0.000	0.000
+serial	-
+smt	-
+branch	0.028	0.000	0.000	0.000
+itlb	-
+dtlb	-
+ifetch	0.004	0.000	0.000	0.000
+mem	-
+mem-l1d	0.022	0.000	0.000	0.000
+mem-l2	-
+mem-l3	-
+mem-l4	-
+mem-remote	-
+mem-nuca	-
+mem-dram-cache	-
+mem-dram	-
+sync	-
+dvfs-transition	-
+imbalance	0.000	3600000.920	3600000.920	3600000.920
+other	0.006	0.000	0.000	0.000
+total	0.397	3600061.840	3600061.840	3600061.840
+base	0.250	0.000	0.000	0.000
+dispatch_width	-
+rs_full	-
+depend	-
+depend-int	0.008	0.000	0.000	0.000
+depend-fp	-
+depend-branch	-
+issue	0.016	0.000	0.000	0.000
+serial	-
+smt	-
+branch	0.023	0.000	0.000	0.000
+itlb	-
+dtlb	-
+ifetch	-
+mem	-
+mem-l1d	0.023	0.000	0.000	0.000
+mem-l2	-
+mem-l3	-
+mem-l4	-
+mem-remote	-
+mem-nuca	-
+mem-dram-cache	-
+mem-dram	0.073	0.000	0.000	0.000
+sync	-
+dvfs-transition	-
+imbalance	0.000	3600061.840	3600061.840	3600061.840
+other	0.004	0.000	0.000	0.000

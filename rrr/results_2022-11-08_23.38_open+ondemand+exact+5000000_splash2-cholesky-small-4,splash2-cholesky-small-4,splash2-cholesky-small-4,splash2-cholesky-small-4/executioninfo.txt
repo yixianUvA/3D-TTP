@@ -1,0 +1,5 @@
+started:    2022-11-09 00:59:01
+ended:      2022-11-09 01:43:45
+duration:   0:44:43.687854
+host:       13249be897e0
+tasks:      splash2-cholesky-small-4,splash2-cholesky-small-4,splash2-cholesky-small-4,splash2-cholesky-small-4

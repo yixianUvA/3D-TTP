@@ -449,7 +449,7 @@ void slope_fn_block(block_model_t *model, double *y, double *p, double *dy)
 void compute_temp_block(block_model_t *model, double *power, double *temp, double time_elapsed)
 {
 	double t, h, new_h;
-
+ 
 	#if VERBOSE > 1
 	unsigned int i = 0;
 	#endif
@@ -460,10 +460,14 @@ void compute_temp_block(block_model_t *model, double *power, double *temp, doubl
 		fatal("output same as scratch pad\n");
 
 	/* set power numbers for the virtual nodes */
-	set_internal_power_block(model, power);
+	//set_internal_power_block(model, power);
 
+	//for(int i=0; i<model->n_nodes;i++)
+	//	printf ("%f",model->t_vector[i]);
 	/* use the scratch pad vector to find (inv_A)*POWER */
 	diagmatvectmult(model->t_vector, model->inva, power, model->n_nodes);
+	//for(int i=0; i<model->n_nodes;i++)
+	//	printf ("%f,%f,%f ",model->t_vector[i]-273.15,model->inva[i],power[i]);
 
 	/* Obtain temp at time (t+time_elapsed). 
 	 * Instead of getting the temperature at t+time_elapsed directly, we do it 

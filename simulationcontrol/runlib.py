@@ -110,11 +110,13 @@ def save_output(configuration_tags, benchmark, console_output, started, ended):
               'combined_temperature.trace',
               'PeriodicFrequency.log',
               'PeriodicVdd.log',
+              'PeriodicPowerBudget.trace',
               'PeriodicCPIStack.log',):
         with open(os.path.join(BENCHMARKS, f), 'rb') as f_in, gzip.open('{}.gz'.format(os.path.join(directory, f)), 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
+    #os.system("rm -f "+BENCHMARKS+"/rc_model.bin")
     create_plots(run)
-    create_video(run)
+    #create_video(run)
 
 
 def run(configuration_tags, benchmark):

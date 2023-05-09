@@ -27,7 +27,7 @@ thermal_config_t default_thermal_config(void)
 	/* temperature threshold for DTM (Kelvin)*/
 	config.thermal_threshold = 81.8 + 273.15;
 
-	/* heat sink specs	*/
+	/* heat sink specs	*/ 
 	config.c_convec = 140.4;			/* convection capacitance in J/K */
 	config.r_convec = 0.1;				/* convection resistance in K/W	*/
 	config.s_sink = 60e-3;				/* heatsink side in m	*/
@@ -601,6 +601,590 @@ RC_model_t *alloc_RC_model(thermal_config_t *config, flp_t *placeholder, int do_
 	return model;	
 }
 
+/* Sobhan: convert grid model to an equivalent bloack model */
+RC_model_t *convert_grid2block(RC_model_t *model)
+{
+	RC_model_t *new_model= (RC_model_t *) calloc (1, sizeof(RC_model_t));
+	if (!new_model)
+		fatal("memory allocation error\n");
+	new_model->type = BLOCK_MODEL;
+	new_model->block = (block_model_t *) calloc (1, sizeof(block_model_t));
+
+  	/* shortcuts for cell width(cw) and cell height(ch)	*/
+  	double cw = model->grid->width / model->grid->cols;
+  	double ch = model->grid->height / model->grid->rows;
+
+    int n, i, j;
+	/* shortcuts	*/
+	
+  	package_RC_t *pk = &model->grid->pack;
+  	//thermal_config_t *c = &model->config;
+  	layer_t *l = model->grid->layers;
+  	int nl = model->grid->n_layers;
+  	int nr = model->grid->rows;
+  	int nc = model->grid->cols;
+  	int spidx, hsidx, subidx, solderidx, pcbidx;
+  	int model_secondary = model->grid->config.model_secondary;
+
+  	spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
+  	hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
+  	if (model_secondary) {
+      subidx = LAYER_SUB;
+      solderidx = LAYER_SOLDER;
+      pcbidx = LAYER_PCB;	
+  	}
+
+	int extra_node;	
+	if(model_secondary)
+		extra_node = EXTRA+EXTRA_SEC;
+	else
+		extra_node = EXTRA;
+
+	new_model->block->n_units = nl*nr*nc;
+	new_model->block->n_nodes = nl*nr*nc + extra_node; 
+
+	double **b = dmatrix(nl*nr*nc+extra_node, nl*nr*nc+extra_node);
+	double **g2b_power = dmatrix(nl*nr*nc+extra_node, model->grid->total_n_blocks+extra_node);
+	double **g2b_temp = dmatrix(nl*nr*nc+extra_node, model->grid->total_n_blocks+extra_node);
+	double *a = dvector(nl*nr*nc+extra_node);
+	double *inva = dvector(nl*nr*nc+extra_node);	
+	double **c = dmatrix(nl*nr*nc+extra_node, nl*nr*nc+extra_node);
+	double *g_amb = dvector(nl*nr*nc+extra_node);
+	double *t_vector = dvector(nl*nr*nc+extra_node);
+	
+	zero_dmatrix(b, nl*nr*nc+extra_node, nl*nr*nc+extra_node);
+	zero_dmatrix(g2b_power, nl*nr*nc+extra_node, model->grid->total_n_blocks+extra_node);
+	zero_dmatrix(g2b_temp, nl*nr*nc+extra_node, model->grid->total_n_blocks+extra_node);
+	zero_dvector(a, nl*nr*nc+extra_node);
+	zero_dvector(inva, nl*nr*nc+extra_node);
+	zero_dvector(g_amb, nl*nr*nc+extra_node);
+	zero_dvector(t_vector, nl*nr*nc+extra_node);
+	new_model->block->b = b;
+	new_model->block->g2b_power = g2b_power;
+	new_model->block->g2b_temp = g2b_temp;
+	new_model->block->a = a;
+	new_model->block->inva = inva;
+	new_model->block->c = c;
+	new_model->block->g_amb = g_amb;
+	new_model->block->t_vector = t_vector;
+
+
+	
+	blist_t *ptr;
+	flp_t *flp;
+	double *v;
+	int type;
+	double area = (model->grid->width * model->grid->height) / (model->grid->cols * model->grid->rows);
+	int base = 0;
+  	for(n=0; n < nl; n++){
+      for(i=0; i < nr; i++){
+        for(j=0; j < nc; j++) {
+            /* for each grid cell, the power density is 
+             * the average of the power densities of the 
+             * blocks in it weighted by their occupancies
+             */
+			ptr = model->grid->layers[n].b2gmap[i][j];
+			flp = model->grid->layers[n].flp;
+  			for(; ptr; ptr = ptr->next)
+			{
+				g2b_power[n*nr*nc + i*nc + j][base + ptr->idx] = ptr->occupancy * area / (flp->units[ptr->idx].width * flp->units[ptr->idx].height);
+				g2b_temp[n*nr*nc + i*nc + j][base + ptr->idx] = ptr->occupancy;
+			}
+		}
+	  }
+	  base += model->grid->layers[n].flp->n_units;
+	}
+	for(int i=0; i<extra_node; i++){
+		g2b_power[nl*nr*nc + i][base + i] = 1;
+		g2b_temp[nl*nr*nc + i][base + i] = 1;
+	}
+
+ 	/* for each grid cell	*/
+  	for(n=0; n < nl; n++)
+	{ 
+    	for(i=0; i < nr; i++)
+      		for(j=0; j < nc; j++) {
+				if(model->grid->config.detailed_3D_used == 1){
+				//if(n > 0) // top neighbor
+					b[n*nr*nc+i*nc+j][(n-1)*nr*nc+i*nc+j] = (n > 0) ? -1.0/find_res_3D(n-1, i, j, model->grid,3) : 0.0;
+				//if(n < nl-1) // bottom neighbor
+					b[n*nr*nc+i*nc+j][(n+1)*nr*nc+i*nc+j] = (n < nl-1) ? -1.0/find_res_3D(n, i, j, model->grid,3) : 0.0;			
+				//if(i > 0)// north neighbor
+					b[n*nr*nc+i*nc+j][n*nr*nc+(i-1)*nc+j] = (i > 0) ? -1.0/find_res_3D(n, i-1, j, model->grid,2) : 0.0; 
+				//if(i < nr-1)// south neighbor
+					b[n*nr*nc+i*nc+j][n*nr*nc+(i+1)*nc+j] = (i < nr-1) ? -1.0/find_res_3D(n, i+1, j, model->grid,2) : 0.0; 
+				//if(j > 0) // west neighbor
+					b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+(j-1)] = (j > 0) ? -1.0/find_res_3D(n, i, j-1, model->grid,1) : 0.0; 
+				//if(j < nc-1) // east neighbor
+					b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+(j+1)] = (j < nc-1) ? -1.0/find_res_3D(n, i, j+1, model->grid,1) : 0.0;
+				}
+				else
+				{
+					b[n*nr*nc+i*nc+j][(n-1)*nr*nc+i*nc+j] = (n > 0) ? -1.0/l[n-1].rz : 0.0;
+					b[n*nr*nc+i*nc+j][(n+1)*nr*nc+i*nc+j] = (n < nl-1) ? -1.0/l[n].rz : 0.0;			
+					b[n*nr*nc+i*nc+j][n*nr*nc+(i-1)*nc+j] = (i > 0) ? -1.0/l[n].ry : 0.0; 
+					b[n*nr*nc+i*nc+j][n*nr*nc+(i+1)*nc+j] = (i < nr-1) ? -1.0/l[n].ry : 0.0; 
+					b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+(j-1)] = (j > 0) ? -1.0/l[n].rx : 0.0; 
+					b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+(j+1)] = (j < nc-1) ? -1.0/l[n].rx : 0.0;
+				}
+				
+				if(n == spidx){
+					if(i == 0){
+						b[n*nr*nc+i*nc+j][nl*nr*nc+SP_N] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sp1_y);
+						b[nl*nr*nc+SP_N][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sp1_y);
+					}
+					if(i == nr-1){
+						b[n*nr*nc+i*nc+j][nl*nr*nc+SP_S] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sp1_y);
+						b[nl*nr*nc+SP_S][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sp1_y);					
+					}
+					if(j == nc-1){
+						b[n*nr*nc+i*nc+j][nl*nr*nc+SP_E] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sp1_x);
+						b[nl*nr*nc+SP_E][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sp1_x);
+					}
+					if(j == 0){
+						b[n*nr*nc+i*nc+j][nl*nr*nc+SP_W] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sp1_x);
+						b[nl*nr*nc+SP_W][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sp1_x);
+					}
+				} else if (n == hsidx) {
+              		/* all nodes are connected to the ambient	*/
+            		b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+j] = 1.0/l[n].rz;
+					g_amb[n*nr*nc+i*nc+j] = 1.0/l[n].rz;
+              		/* northern boundary - edge cell has half the ry	*/
+              		if (i == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SINK_C_N] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_hs1_y);
+					    b[nl*nr*nc+SINK_C_N][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_hs1_y); 
+					}
+              		/* southern boundary - edge cell has half the ry	*/
+              		if (i == nr-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SINK_C_S] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_hs1_y);
+						b[nl*nr*nc+SINK_C_S][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_hs1_y); 
+					}
+              		/* eastern boundary	 - edge cell has half the rx	*/
+              		if (j == nc-1){
+					    b[n*nr*nc+i*nc+j][nl*nr*nc+SINK_C_E] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_hs1_x); 
+					    b[nl*nr*nc+SINK_C_E][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_hs1_x);
+					}
+					/* western boundary	 - edge cell has half the rx	*/
+              		if (j == 0){
+					  	b[n*nr*nc+i*nc+j][nl*nr*nc+SINK_C_W] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_hs1_x);
+					  	b[nl*nr*nc+SINK_C_W][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_hs1_x);
+					}
+          		} else if (n == pcbidx && model_secondary) {
+              		/* all nodes are connected to the ambient	*/
+				    b[n*nr*nc+i*nc+j][n*nr*nc+i*nc+j] = 1.0/(model->grid->config.r_convec_sec * (model->grid->config.s_pcb * model->grid->config.s_pcb) / (cw * ch));
+              		
+					g_amb[n*nr*nc+i*nc+j] = 1.0/(model->grid->config.r_convec_sec * (model->grid->config.s_pcb * model->grid->config.s_pcb) / (cw * ch));
+					/* northern boundary - edge cell has half the ry	*/
+              		if (i == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+PCB_C_N] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_pcb1_y); 
+                		b[nl*nr*nc+PCB_C_N][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_pcb1_y); 
+					}
+              		/* southern boundary - edge cell has half the ry	*/
+              		if (i == nr-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+PCB_C_S] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_pcb1_y);
+						b[nl*nr*nc+PCB_C_S][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_pcb1_y); 
+					} 
+              		/* eastern boundary	 - edge cell has half the rx	*/
+              		if (j == nc-1){
+           				b[n*nr*nc+i*nc+j][nl*nr*nc+PCB_C_E] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_pcb1_x); 
+           				b[nl*nr*nc+PCB_C_E][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_pcb1_x); 
+					}
+              		/* western boundary	 - edge cell has half the rx	*/
+              		if (j == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+PCB_C_W] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_pcb1_x); 
+                		b[nl*nr*nc+PCB_C_W][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_pcb1_x); 
+					}
+          		} else if (n == subidx && model_secondary) {
+              		/* northern boundary - edge cell has half the ry	*/
+              		if (i == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SUB_N] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sub1_y); 
+                		b[nl*nr*nc+SUB_N][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sub1_y); 
+					}
+					/* southern boundary - edge cell has half the ry	*/
+              		if (i == nr-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SUB_S] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sub1_y); 
+                		b[nl*nr*nc+SUB_S][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_sub1_y); 
+					}
+					/* eastern boundary	 - edge cell has half the rx	*/
+              		if (j == nc-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SUB_E] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sub1_x); 
+                		b[nl*nr*nc+SUB_E][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sub1_x); 
+					}
+					/* western boundary	 - edge cell has half the rx	*/
+              		if (j == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SUB_W] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sub1_x); 
+          		        b[nl*nr*nc+SUB_W][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_sub1_x); 
+					}
+				} else if (n == solderidx && model_secondary) {
+              		/* northern boundary - edge cell has half the ry	*/
+              		if (i == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SOLDER_N] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_solder1_y); 
+              		    b[nl*nr*nc+SOLDER_N][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_solder1_y); 
+					}
+					/* southern boundary - edge cell has half the ry	*/
+              		if (i == nr-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SOLDER_S] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_solder1_y); 
+                		b[nl*nr*nc+SOLDER_S][n*nr*nc+i*nc+j] = -1.0/(l[n].ry/2.0 + nc*model->grid->pack.r_solder1_y); 
+					}
+					/* eastern boundary	 - edge cell has half the rx	*/
+              		if (j == nc-1){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SOLDER_E] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_solder1_x); 
+                		b[nl*nr*nc+SOLDER_E][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_solder1_x); 
+					}
+					/* western boundary	 - edge cell has half the rx	*/
+              		if (j == 0){
+                		b[n*nr*nc+i*nc+j][nl*nr*nc+SOLDER_W] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_solder1_x); 
+                		b[nl*nr*nc+SOLDER_W][n*nr*nc+i*nc+j] = -1.0/(l[n].rx/2.0 + nr*model->grid->pack.r_solder1_x); 
+					}
+				}
+ 			
+			 	/* load cell's capacitance in matrix A */	    
+          		if(model->grid->config.detailed_3D_used == 1)//BU_3D: use find_cap_3D is detailed_3D model is used.
+            		a[n*nr*nc+i*nc+j] = find_cap_3D(n, i, j, model->grid);
+          		else
+            		a[n*nr*nc+i*nc+j] = l[n].c;
+			}
+	}
+  
+	/* load the matrices A, B, and G_amb for the package nodes	*/
+  	int extra_idx = nl*nr*nc;
+	//model->block->n_nodes = nl*nr*nc + extra_node;
+  	/* sink outer north/south	*/
+  	b[extra_idx+SINK_N][extra_idx+SINK_N] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+  	b[extra_idx+SINK_C_N][extra_idx+SINK_N] = -1.0/(pk->r_hs2_y + pk->r_hs);
+  	b[extra_idx+SINK_N][extra_idx+SINK_C_N] = -1.0/(pk->r_hs2_y + pk->r_hs);
+
+  	g_amb[extra_idx+SINK_N] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+
+	a[extra_idx + SINK_N] = pk->c_hs_per + pk->c_amb_per;
+
+  	b[extra_idx+SINK_S][extra_idx+SINK_S] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+  	b[extra_idx+SINK_C_S][extra_idx+SINK_S] = -1.0/(pk->r_hs2_y + pk->r_hs);
+  	b[extra_idx+SINK_S][extra_idx+SINK_C_S] = -1.0/(pk->r_hs2_y + pk->r_hs);
+
+  	g_amb[extra_idx+SINK_S] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+  	
+	a[extra_idx + SINK_S] = pk->c_hs_per + pk->c_amb_per;
+
+  	/* sink outer west/east	*/
+  	b[extra_idx+SINK_W][extra_idx+SINK_W] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+  	b[extra_idx+SINK_C_W][extra_idx+SINK_W] = -1.0/(pk->r_hs2_x + pk->r_hs);
+  	b[extra_idx+SINK_W][extra_idx+SINK_C_W] = -1.0/(pk->r_hs2_x + pk->r_hs);
+
+  	g_amb[extra_idx + SINK_W] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+
+  	a[extra_idx + SINK_W] = pk->c_hs_per + pk->c_amb_per;
+
+  	b[extra_idx+SINK_E][extra_idx+SINK_E] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+  	b[extra_idx+SINK_C_E][extra_idx+SINK_E] = -1.0/(pk->r_hs2_x + pk->r_hs);
+  	b[extra_idx+SINK_E][extra_idx+SINK_C_E] = -1.0/(pk->r_hs2_x + pk->r_hs);
+
+  	g_amb[extra_idx + SINK_E] = 1.0/(pk->r_hs_per + pk->r_amb_per);
+
+  	a[extra_idx + SINK_E] = pk->c_hs_per + pk->c_amb_per;
+
+  	/* sink inner north/south	*/
+  	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
+
+  	for(j=0; j < nc; j++){
+  		b[(hsidx)*(nr)*(nc)+ (0)*(nc) + (j)][extra_idx + SINK_C_N] = -1.0/(l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
+  		b[extra_idx + SINK_C_N][(hsidx)*(nr)*(nc)+ (0)*(nc) + (j)] = -1.0/(l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
+  	}
+	b[extra_idx + SINK_C_N][extra_idx + SINK_C_N] = 1.0/(pk->r_hs_c_per_y + pk->r_amb_c_per_y);
+  	b[extra_idx + SP_N][extra_idx + SINK_C_N] = -1.0/pk->r_sp_per_y;
+  	b[extra_idx + SINK_C_N][extra_idx + SP_N] = -1.0/pk->r_sp_per_y;
+  	b[extra_idx + SINK_N][extra_idx + SINK_C_N] = -1.0/(pk->r_hs2_y + pk->r_hs);
+  	b[extra_idx + SINK_C_N][extra_idx + SINK_N] = -1.0/(pk->r_hs2_y + pk->r_hs);
+    
+	g_amb[extra_idx + SINK_C_N] = 1.0/(pk->r_hs_c_per_y + pk->r_amb_c_per_y);
+  	a[extra_idx + SINK_C_N] = pk->c_hs_c_per_y + pk->c_amb_c_per_y;
+
+  	for(j=0; j < nc; j++){
+		b[(hsidx)*(nr)*(nc)+ (nr-1)*(nc) + (j)][extra_idx + SINK_C_S] = -1.0/(l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
+		b[extra_idx + SINK_C_S][(hsidx)*(nr)*(nc)+ (nr-1)*(nc) + (j)] = -1.0/(l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
+  	}
+
+	b[extra_idx + SINK_C_S][extra_idx + SINK_C_S] = 1.0/(pk->r_hs_c_per_y + pk->r_amb_c_per_y);
+  	b[extra_idx + SP_S][extra_idx + SINK_C_S] = -1.0/pk->r_sp_per_y;
+  	b[extra_idx + SINK_C_S][extra_idx + SP_S] = -1.0/pk->r_sp_per_y;
+  	b[extra_idx + SINK_S][extra_idx + SINK_C_S] = -1.0/(pk->r_hs2_y + pk->r_hs);
+  	b[extra_idx + SINK_C_S][extra_idx + SINK_S] = -1.0/(pk->r_hs2_y + pk->r_hs);
+
+  	g_amb[extra_idx + SINK_C_S] = 1.0/(pk->r_hs_c_per_y + pk->r_amb_c_per_y);
+  	a[extra_idx + SINK_C_S] = pk->c_hs_c_per_y + pk->c_amb_c_per_y;
+
+  	/* sink inner west/east	*/
+  	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
+  
+  	for(i=0; i < nr; i++){
+		b[(hsidx)*(nr)*(nc)+ (i)*(nc) + (0)][extra_idx + SINK_C_W] = -1.0/(l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
+		b[extra_idx + SINK_C_W][(hsidx)*(nr)*(nc)+ (i)*(nc) + (0)] = -1.0/(l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
+  	}
+	b[extra_idx + SINK_C_W][extra_idx + SINK_C_W] = 1.0/(pk->r_hs_c_per_x + pk->r_amb_c_per_x);
+  	b[extra_idx + SP_W][extra_idx + SINK_C_W] = -1.0/pk->r_sp_per_x;
+  	b[extra_idx + SINK_C_W][extra_idx + SP_W] = -1.0/pk->r_sp_per_x ;
+  	b[extra_idx + SINK_W][extra_idx + SINK_C_W] = -1.0/(pk->r_hs2_x + pk->r_hs);
+  	b[extra_idx + SINK_C_W][extra_idx + SINK_W] = -1.0/(pk->r_hs2_x + pk->r_hs);
+
+  	g_amb[extra_idx + SINK_C_W] = 1.0/(pk->r_hs_c_per_x + pk->r_amb_c_per_x);
+  	a[extra_idx + SINK_C_W] = pk->c_hs_c_per_x + pk->c_amb_c_per_x;
+
+  	for(i=0; i < nr; i++){
+		b[(hsidx)*(nr)*(nc) + (i)*(nc) + (nc-1)][extra_idx + SINK_C_E] = -1.0/(l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
+		b[extra_idx + SINK_C_E][(hsidx)*(nr)*(nc) + (i)*(nc) + (nc-1)] = -1.0/(l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
+  	}
+	b[extra_idx + SINK_C_E][extra_idx + SINK_C_E] = 1.0/(pk->r_hs_c_per_x + pk->r_amb_c_per_x);
+  	b[extra_idx + SP_E][extra_idx + SINK_C_E] = -1.0/pk->r_sp_per_x;
+  	b[extra_idx + SINK_C_E][extra_idx + SP_E] = -1.0/pk->r_sp_per_x ;
+  	b[extra_idx + SINK_E][extra_idx + SINK_C_E] = -1.0/(pk->r_hs2_x + pk->r_hs);
+  	b[extra_idx + SINK_C_E][extra_idx + SINK_E] = -1.0/(pk->r_hs2_x + pk->r_hs);
+
+  	g_amb[extra_idx + SINK_C_E] = 1.0/(pk->r_hs_c_per_x + pk->r_amb_c_per_x);
+  	a[extra_idx + SINK_C_E] = pk->c_hs_c_per_x + pk->c_amb_c_per_x;
+
+  	/* spreader north/south	*/
+   	/* partition r_sp1_y among all the nc grid cells. edge cell has half the ry	*/
+  	for(j=0; j < nc; j++){
+		b[(spidx)*(nr)*(nc) + (0)*(nc) + (j)][extra_idx + SP_N] = -1.0/(l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
+		b[extra_idx + SP_N][(spidx)*(nr)*(nc) + (0)*(nc) + (j)] = -1.0/(l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
+  	}
+	b[extra_idx + SP_N][extra_idx + SINK_C_N] = -1.0/pk->r_sp_per_y;
+	b[extra_idx + SINK_C_N][extra_idx + SP_N] = -1.0/pk->r_sp_per_y;
+	a[extra_idx + SP_N] = pk->c_sp_per_y;
+
+ 	for(j=0; j < nc; j++){
+		b[(spidx)*(nr)*(nc) + (nr-1)*(nc) + (j)][extra_idx + SP_S] = -1.0/(l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
+		b[extra_idx + SP_S][(spidx)*(nr)*(nc) + (nr-1)*(nc) + (j)] = -1.0/(l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
+	}
+	b[extra_idx + SP_S][extra_idx + SINK_C_S] = -1.0/pk->r_sp_per_y;
+	b[extra_idx + SINK_C_S][extra_idx + SP_S] = -1.0/pk->r_sp_per_y; 
+  	a[extra_idx + SP_S] =  pk->c_sp_per_y;
+
+	/* spreader west/east	*/
+	/* partition r_sp1_x among all the nr grid cells. edge cell has half the rx	*/
+  	for(i=0; i < nr; i++){
+		b[(spidx)*(nr)*(nc) + (i)*(nc) + (0)][extra_idx + SP_W] = -1.0/(l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
+		b[extra_idx + SP_W][(spidx)*(nr)*(nc) + (i)*(nc) + (0)] = -1.0/(l[spidx].rx / 2.0 + nc * pk->r_sp1_x);
+  	}
+	b[extra_idx + SP_W][extra_idx + SINK_C_W] = -1.0/pk->r_sp_per_x;
+	b[extra_idx + SINK_C_W][extra_idx + SP_W] = -1.0/pk->r_sp_per_x;
+	a[extra_idx + SP_W] = pk->c_sp_per_x;
+
+ 	for(i=0; i < nr; i++){
+		b[(spidx)*(nr)*(nc) + (i)*(nc) + (nc-1)][extra_idx + SP_E] = -1.0/(l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
+		b[extra_idx + SP_E][(spidx)*(nr)*(nc) + (i)*(nc) + (nc-1)] = -1.0/(l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
+	}
+	b[extra_idx + SP_E][extra_idx + SINK_C_E] = -1.0/pk->r_sp_per_x;
+	b[extra_idx + SINK_C_E][extra_idx + SP_E] = -1.0/pk->r_sp_per_x;
+
+  	a[extra_idx + SP_E] =  pk->c_sp_per_x;
+
+	if (model_secondary) {
+      /* PCB outer north/south	*/
+		b[extra_idx + PCB_N][extra_idx + PCB_N] = 1.0/pk->r_amb_sec_per;
+		b[extra_idx + PCB_C_N][extra_idx + PCB_N] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+		b[extra_idx + PCB_N][extra_idx + PCB_C_N] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_N] = 1.0/pk->r_amb_sec_per;
+
+		a[extra_idx + PCB_N] = pk->c_pcb_per + pk->c_amb_sec_per;
+
+		b[extra_idx + PCB_S][extra_idx + PCB_S] = 1.0/pk->r_amb_sec_per;
+		b[extra_idx + PCB_C_S][extra_idx + PCB_S] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+		b[extra_idx + PCB_S][extra_idx + PCB_C_S] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_S] = 1.0/pk->r_amb_sec_per;
+
+		a[extra_idx + PCB_S] = pk->c_pcb_per + pk->c_amb_sec_per;
+
+		/* PCB outer west/east	*/
+
+		b[extra_idx + PCB_W][extra_idx + PCB_W] = 1.0/pk->r_amb_sec_per;
+		b[extra_idx + PCB_C_W][extra_idx + PCB_W] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+		b[extra_idx + PCB_W][extra_idx + PCB_C_W] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_W] = 1.0/pk->r_amb_sec_per;
+
+		a[extra_idx + PCB_W] = pk->c_pcb_per + pk->c_amb_sec_per;
+
+		b[extra_idx + PCB_E][extra_idx + PCB_E] = 1.0/pk->r_amb_sec_per;
+		b[extra_idx + PCB_C_E][extra_idx + PCB_E] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+		b[extra_idx + PCB_E][extra_idx + PCB_C_E] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_E] = 1.0/pk->r_amb_sec_per;
+
+		a[extra_idx + PCB_E] = pk->c_pcb_per + pk->c_amb_sec_per;
+
+		/* PCB inner north/south	*/
+		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
+      
+		for(j=0; j < nc; j++){
+			b[(pcbidx)*(nr)*(nc) + (0)*(nc) + j][extra_idx + PCB_C_N] = -1.0/(l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
+			b[extra_idx + PCB_C_N][(pcbidx)*(nr)*(nc) + (0)*(nc) + j] = -1.0/(l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
+		}
+		b[extra_idx + PCB_C_N][extra_idx + PCB_C_N] = 1.0/(pk->r_amb_sec_c_per_y);
+		b[extra_idx + SOLDER_N][extra_idx + PCB_C_N] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + PCB_C_N][extra_idx + SOLDER_N] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + PCB_N][extra_idx + PCB_C_N] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+		b[extra_idx + PCB_C_N][extra_idx + PCB_N] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_C_N] = 1.0/(pk->r_amb_sec_c_per_y);
+
+		a[extra_idx + PCB_C_N] = pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y;
+
+		for(j=0; j < nc; j++){
+			b[(pcbidx)*(nr)*(nc) + (nr-1)*(nc) + j][extra_idx + PCB_C_S] = -1.0/(l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
+			b[extra_idx + PCB_C_S][(pcbidx)*(nr)*(nc) + (nr-1)*(nc) + j] = -1.0/(l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
+		}
+		b[extra_idx + PCB_C_S][extra_idx + PCB_C_S] = 1.0/(pk->r_amb_sec_c_per_y);
+		b[extra_idx + SOLDER_S][extra_idx + PCB_C_S] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + PCB_C_S][extra_idx + SOLDER_S] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + PCB_S][extra_idx + PCB_C_S] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+		b[extra_idx + PCB_C_S][extra_idx + PCB_S] = -1.0/(pk->r_pcb2_y + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_C_S] = 1.0/(pk->r_amb_sec_c_per_y);
+
+		a[extra_idx + PCB_C_S] = pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y;
+
+		/* PCB inner west/east	*/
+		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
+      
+		for(i=0; i < nr; i++){
+			b[(pcbidx)*(nr)*(nc) + (i)*(nc) + 0][extra_idx + PCB_C_W] = -1.0/(l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
+			b[extra_idx + PCB_C_W][(pcbidx)*(nr)*(nc) + (i)*(nc) + 0] = -1.0/(l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
+		}
+		b[extra_idx + PCB_C_W][extra_idx + PCB_C_W] = 1.0/(pk->r_amb_sec_c_per_x);
+		b[extra_idx + SOLDER_W][extra_idx + PCB_C_W] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + PCB_C_W][extra_idx + SOLDER_W] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + PCB_W][extra_idx + PCB_C_W] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+		b[extra_idx + PCB_C_W][extra_idx + PCB_W] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_C_W] = 1.0/(pk->r_amb_sec_c_per_x);
+
+		a[extra_idx + PCB_C_W] = pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x;
+
+		for(i=0; i < nr; i++){
+			b[(pcbidx)*(nr)*(nc) + (i)*(nc) + nc-1][extra_idx + PCB_C_E] = -1.0/(l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
+			b[extra_idx + PCB_C_E][(pcbidx)*(nr)*(nc) + (i)*(nc) + nc-1] = -1.0/(l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
+		}
+		b[extra_idx + PCB_C_E][extra_idx + PCB_C_E] = 1.0/(pk->r_amb_sec_c_per_x);
+		b[extra_idx + SOLDER_E][extra_idx + PCB_C_E] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + PCB_C_E][extra_idx + SOLDER_E] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + PCB_E][extra_idx + PCB_C_E] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+		b[extra_idx + PCB_C_E][extra_idx + PCB_E] = -1.0/(pk->r_pcb2_x + pk->r_pcb);
+
+		g_amb[extra_idx + PCB_C_E] = 1.0/(pk->r_amb_sec_c_per_x);
+
+		a[extra_idx + PCB_C_E] = pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x;
+
+		/* solder ball north/south	*/
+		/* partition r_solder1_y among all the nc grid cells. edge cell has half the ry	*/
+      
+		for(j=0; j < nc; j++){
+			b[(solderidx)*(nr)*(nc) + (0)*(nc) + j][extra_idx + SOLDER_N] = -1.0/(l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
+			b[extra_idx + SOLDER_N][(solderidx)*(nr)*(nc) + (0)*(nc) + j] = -1.0/(l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
+		}
+		b[extra_idx + PCB_C_N][extra_idx + SOLDER_N] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + SOLDER_N][extra_idx + PCB_C_N] = -1.0/pk->r_pcb_c_per_y;
+
+		a[extra_idx + SOLDER_N] = pk->c_solder_per_y;
+
+		for(j=0; j < nc; j++){
+			b[(solderidx)*(nr)*(nc) + (nr-1)*(nc) + j][extra_idx + SOLDER_S] = -1.0/(l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
+			b[extra_idx + SOLDER_S][(solderidx)*(nr)*(nc) + (nr-1)*(nc) + j] = -1.0/(l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
+		}
+		b[extra_idx + PCB_C_S][extra_idx + SOLDER_S] = -1.0/pk->r_pcb_c_per_y;
+		b[extra_idx + SOLDER_S][extra_idx + PCB_C_S] = -1.0/pk->r_pcb_c_per_y;
+
+		a[extra_idx + SOLDER_S] = pk->c_solder_per_y;
+
+		/* solder ball west/east	*/
+		/* partition r_solder1_x among all the nr grid cells. edge cell has half the rx	*/
+		for(i=0; i < nr; i++){
+			b[(solderidx)*(nr)*(nc) + (i)*(nc) + 0][extra_idx + SOLDER_W] = -1.0/(l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
+			b[extra_idx + SOLDER_W][(solderidx)*(nr)*(nc) + (i)*(nc) + 0] = -1.0/(l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
+		}
+		b[extra_idx + PCB_C_W][extra_idx + SOLDER_W] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + SOLDER_W][extra_idx + PCB_C_W] = -1.0/pk->r_pcb_c_per_x;
+
+		a[extra_idx + SOLDER_W] = pk->c_solder_per_x;
+
+		for(i=0; i < nr; i++){
+			b[(solderidx)*(nr)*(nc) + (i)*(nc) + nc-1][extra_idx + SOLDER_E] = -1.0/(l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
+			b[extra_idx + SOLDER_E][(solderidx)*(nr)*(nc) + (i)*(nc) + nc-1] = -1.0/(l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
+		}
+		b[extra_idx + PCB_C_E][extra_idx + SOLDER_E] = -1.0/pk->r_pcb_c_per_x;
+		b[extra_idx + SOLDER_E][extra_idx + PCB_C_E] = -1.0/pk->r_pcb_c_per_x;
+
+		a[extra_idx + SOLDER_E] = pk->c_solder_per_x;
+
+		/* package substrate north/south	*/
+		/* partition r_sub1_y among all the nc grid cells. edge cell has half the ry	*/
+		for(j=0; j < nc; j++){
+			b[(subidx)*(nr)*(nc) + (0)*(nc) + j][extra_idx + SUB_N] = -1.0/(l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
+			b[extra_idx + SUB_N][(subidx)*(nr)*(nc) + (0)*(nc) + j] = -1.0/(l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
+		}
+		b[extra_idx + SOLDER_N][extra_idx + SUB_N] = -1.0/pk->r_solder_per_y;
+		b[extra_idx + SUB_N][extra_idx + SOLDER_N] = -1.0/pk->r_solder_per_y;
+
+		a[extra_idx + SUB_N] = pk->c_sub_per_y;
+
+		for(j=0; j < nc; j++){
+			b[(subidx)*(nr)*(nc) + (nr-1)*(nc) + j][extra_idx + SUB_S] = -1.0/(l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
+			b[extra_idx + SUB_S][(subidx)*(nr)*(nc) + (nr-1)*(nc) + j] = -1.0/(l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
+		}
+		b[extra_idx + SOLDER_S][extra_idx + SUB_S] = -1.0/pk->r_solder_per_y;
+		b[extra_idx + SUB_S][extra_idx + SOLDER_S] = -1.0/pk->r_solder_per_y;
+
+		a[extra_idx + SUB_S] = pk->c_sub_per_y;
+
+		/* sub ball west/east	*/
+		/* partition r_sub1_x among all the nr grid cells. edge cell has half the rx	*/
+
+		for(i=0; i < nr; i++){
+			b[(subidx)*(nr)*(nc) + (i)*(nc) + 0][extra_idx + SUB_W] = -1.0/(l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
+			b[extra_idx + SUB_W][(subidx)*(nr)*(nc) + (i)*(nc) + 0] = -1.0/(l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
+		}
+		b[extra_idx + SOLDER_W][extra_idx + SUB_W] = -1.0/pk->r_solder_per_x;
+		b[extra_idx + SUB_W][extra_idx + SOLDER_W] = -1.0/pk->r_solder_per_x;
+
+		a[extra_idx + SUB_W] = pk->c_sub_per_x;
+	  
+		for(i=0; i < nr; i++){
+			b[(subidx)*(nr)*(nc) + (i)*(nc) + nc-1][extra_idx + SUB_E] = -1.0/(l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
+			b[extra_idx + SUB_E][(subidx)*(nr)*(nc) + (i)*(nc) + nc-1] = -1.0/(l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
+		}
+		b[extra_idx + SOLDER_E][extra_idx + SUB_E] = -1.0/pk->r_solder_per_x;
+		b[extra_idx + SUB_E][extra_idx + SOLDER_E] = -1.0/pk->r_solder_per_x;
+
+		a[extra_idx + SUB_E] = pk->c_sub_per_x;
+  	}
+
+	/* sum up the conductances	*/
+  	for(i = 0; i < new_model->block->n_nodes; i++)
+	{
+		for(j = 0; j < new_model->block->n_nodes; j++)
+		{
+			if(i != j)
+				b[i][i] -= b[i][j];
+		}
+	}
+	//printf("check B matrix: b[%d][%d] == b [%d][%d] (%f,%f), b[%d][%d] == b [%d][%d](%f,%f), b[%d][%d] == b [%d][%d](%f,%f)\n", 1,2,2,1,b[1][2],b[2][1],20,21,21,20,b[20][21],b[21][20],0,64,64,0,b[0][64],b[64][0]); 
+	/* calculate A^-1 (for diagonal matrix A) such that A(dT) + BT = POWER */
+	for (i = 0; i < new_model->block->n_nodes; i++)
+	{
+		inva[i] = 1.0/a[i];
+	}
+	/* we are always going to use the eqn dT + A^-1 * B T = A^-1 * POWER. so, store  C = A^-1 * B	*/
+	diagmatmult(c, inva, b, new_model->block->n_nodes); 
+    
+	/*	done	*/
+	new_model->block->c_ready = TRUE; 
+	new_model->block->r_ready = TRUE;
+
+	return new_model;	
+}
+
 /* populate the thermal restistance values */
 void populate_R_model(RC_model_t *model, flp_t *flp)
 {
@@ -646,7 +1230,7 @@ double calc_lc_leakage(int mode, double h, double w, double temp)
 //	leakage_power = 0.148;					// At 298 (25)
 //	leakage_power = 0.272;					// At 353 (80)
 
-	leakage_power = 1.0 * leakage_power;
+	leakage_power = 1.0 * leakage_power; 
 	//printf("leak = %f\n",leakage_power);
 	return leakage_power;	
 }
@@ -980,16 +1564,16 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
 							blk_width = model->grid->layers[k].flp->units[j].width;
 							if (k==3){ 	// Layer0 : In 3Dmem is an SRAM layer its leakage model is different.
 									if (leakage[j] == 0)
-										power_new[base+j] = 0;
+										power[base+j] = 0;
 									else
-										power_new[base+j] = power[base+j] + calc_lc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);	
+										power[base+j] = power[base+j] + calc_lc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);	
 										//printf("%f ", power[base+j]);
 							}
 							else{		// Layer above the base layer in 3Dmem, have a DRAM leakage model.
 									if (leakage[j] == 0)
-										power_new[base+j] = 0;
+										power[base+j] = 0;
 									else	
-										power_new[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
+										power[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
 				 					// printf("YES");
 							}
 							//temp_old[base+j] = temp[base+j]; //copy temp before update
@@ -1012,10 +1596,10 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
 							blk_height = model->grid->layers[k].flp->units[j].height;
 							blk_width = model->grid->layers[k].flp->units[j].width;
 							if (leakage[j] == 0)
-								power_new[base+j] = 0;
+								power[base+j] = 0;
 							else{	
 									//printf("volt[j] = %d\n", volt[j]);
-									power_new[base+j] = power[base+j] +  ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
+									power[base+j] = power[base+j] +  ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
 		 					// printf("YES");
 							}
 							//temp_old[base+j] = temp[base+j]; //copy temp before update
@@ -1040,13 +1624,13 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
 							blk_height = model->grid->layers[k].flp->units[j].height;
 							blk_width = model->grid->layers[k].flp->units[j].width;
 							if (k==19){ 	// Layer0 : In 3Dmem is an SRAM layer its leakage model is different.
-									power_new[base+j] = power[base+j] + ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);										//printf("%f ", power[base+j]);
+									power[base+j] = power[base+j] + ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);										//printf("%f ", power[base+j]);
 							}
 							else{		// Layer above the base layer in 3Dmem, have a DRAM leakage model.
 									if (leakage[j] == 0)
-										power_new[base+j] = 0;
+										power[base+j] = 0;
 									else	
-										power_new[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
+										power[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
 				 					// printf("YES");
 							}
 							//temp_old[base+j] = temp[base+j]; //copy temp before update
@@ -1069,28 +1653,28 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
 							blk_width = model->grid->layers[k].flp->units[j].width;
 							if (k==5){ // Layer0 : Interposer, Layer 1: TIM, layer 2 in 3Dmem is an SRAM layer its leakage model is different.
 								if ( (j==22) || (j==21) || (j==20) )	// No leakeage in air. Assuming 4 cores + 16 LC
-									power_new[base+j] = power[base+j];
+									power[base+j] = power[base+j];
 								else{
 									if ( (j>=0) && (j<=3) )	// Leakage for Host core. Assuming 4 cores
-										power_new[base+j] = power[base+j] + ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
+										power[base+j] = power[base+j] + ((float) volt[j]/10) * calc_core_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
 				 					// printf("YES");
 									else				// Leakage for 3Dmem logic core
 									{
 										if (leakage[j-4] == 0)
-											power_new[base+j] = 0;
+											power[base+j] = 0;
 										else
-											power_new[base+j] = power[base+j] + calc_lc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);	
+											power[base+j] = power[base+j] + calc_lc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);	
 									}
 								}						
 							}
 							else{	// layer above the base layer in 3Dmem, have a DRAM leakage model.
 								if ( (j==19) || (j==18) || (j==17) || (j==16))	// No leakeage in air
-									power_new[base+j] = power[base+j];
+									power[base+j] = power[base+j];
 								else{
 										if (leakage[j] == 0)
-											power_new[base+j] = 0;
+											power[base+j] = 0;
 										else	
-											power_new[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
+											power[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp_first_time[base+j]);
 				 					// printf("YES");
 								}						
 							}
@@ -1104,7 +1688,134 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
                         }//end of if memory type
 
 			// printf("Calling compute_temp_grid\n");					
-			compute_temp_grid(model->grid, power_new, temp_first_time, time_elapsed);
+			compute_temp_grid(model->grid, power, temp_first_time, time_elapsed);
+			
+			/*Sobhan added start*/
+			int extra_nodes;
+  			grid_model_vector_t *p, *t;
+
+  			if (model->grid->config.model_secondary)
+    			extra_nodes = EXTRA + EXTRA_SEC;
+  			else 
+    			extra_nodes = EXTRA;
+
+  			p = new_grid_model_vector(model->grid);
+  			t = new_grid_model_vector(model->grid);
+
+  			/* package nodes' power numbers	*/
+  			set_internal_power_grid(model->grid, power);  
+
+  			/* map the block power/temp numbers to the grid	*/
+  			xlate_vector_b2g(model->grid, power, p, V_POWER);
+
+  			/* if temp is NULL, re-use the temperature from the
+  			* last call. otherwise, translate afresh and remember 
+   			* the grid and block temperature arrays for future use
+   			*/
+  			if (temp_first_time != NULL) {
+      			xlate_vector_b2g(model->grid, temp_first_time, t, V_TEMP);
+      			//model->grid->last_temp = temp_first_time;
+			}
+			int nl = model->grid->n_layers;
+			int nr = model->grid->rows;
+			int nc = model->grid->cols;
+			double *power_block = dvector(nl*nr*nc+extra_nodes);
+			double *temp_block = dvector(nl*nr*nc+extra_nodes);
+			zero_dvector(power_block, nl*nr*nc+extra_nodes);
+			zero_dvector(temp_block, nl*nr*nc+extra_nodes);
+			for(int n=0; n < nl; n++)
+      			for(int i=0; i < nr; i++)
+        			for(int j=0; j < nc; j++) {
+						//printf("[%d][%d][%d] = %f %f", n, i, j, p->cuboid[n][i][j], t->cuboid[n][i][j]-273.15); 
+						power_block[n*nr*nc + i*nc + j] = p->cuboid[n][i][j] + model->grid->config.ambient * model->block->g_amb[n*nr*nc + i*nc + j];
+						temp_block[n*nr*nc + i*nc + j] = t->cuboid[n][i][j];
+					}
+			for(int k=0; k<extra_nodes; k++){						
+				//printf("extra [%d] = %f %f", k, p->extra[k], t->extra[k]-273.15); 
+				power_block[nl*nr*nc + k] = p->extra[k] + model->grid->config.ambient * model->block->g_amb[nl*nr*nc + k];
+				temp_block[nl*nr*nc + k] = t->extra[k];
+			}
+
+  			/*int hsidx, pcbidx;
+  			int model_secondary = model->grid->config.model_secondary;
+
+  			hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
+  			if (model_secondary)
+      			pcbidx = LAYER_PCB;	
+
+			int i;
+			for(i=0; i < nl*nr*nc + EXTRA_SEC; i++)
+				power_block[i*nr*nc+i] = model->grid->config.ambient * model->block->g_amb[i];
+			*/
+
+			//fprintf(stdout, "number of nodes: %d\n", model->block->n_nodes);
+			//fprintf(stdout, "number of blocks: %d\n", model->grid->total_n_blocks);
+
+			compute_temp_block(model->block, power_block, temp_block, time_elapsed);  
+  			
+			grid_model_vector_t *temp;
+  			temp = new_grid_model_vector(model->grid);
+			for(int n=0; n < nl; n++)
+			{
+      			for(int i=0; i < nr; i++)
+				{
+					/*int u;
+					int reach = 0;
+					for(u=0; u<model->grid->layers[n].flp->n_units;u++)
+					{
+						//if(u==0 || u==1)
+						//	printf ("%d, %d, %d, %d\n",model->grid->layers[n].g2bmap[u].i1, model->grid->layers[n].g2bmap[u].i2, model->grid->layers[n].g2bmap[u].j1, model->grid->layers[n].g2bmap[u].j2);
+						if(i == model->grid->layers[n].g2bmap[u].i1 || i == model->grid->layers[n].g2bmap[u].i2)
+							reach++;
+					}
+					if(reach !=0)
+					{
+						for(int j=0; j < nc; j++)
+							printf ("	-");
+						printf ("\n");
+					}*/
+					for(int j=0; j < nc; j++)
+					{
+						//if(j == model->grid->layers[n].g2bmap[0].j1 || j == model->grid->layers[n].g2bmap[1].j1 || j == model->grid->layers[n].g2bmap[2].j1 || j == model->grid->layers[n].g2bmap[3].j1 || j == model->grid->layers[n].g2bmap[0].j2 || j == model->grid->layers[n].g2bmap[1].j2 || j == model->grid->layers[n].g2bmap[2].j2 || j == model->grid->layers[n].g2bmap[3].j2)
+						//	printf ("| ");
+						temp->cuboid[n][i][j] = temp_block[n*nr*nc + i*nc + j];//model->block->t_vector[n*nr*nc + i*nc + j];
+						//printf ("%f ",temp_block[n*nr*nc + i*nc + j]-273.15);
+						//if((n*nr*nc + i*nc + j)%8 == 7)
+						//	printf ("\n");
+					}
+				}
+				//printf ("\n");   
+			}
+			for(int k=0; k<extra_nodes; k++)
+			{
+			 	temp->extra[k] = temp_block[nl*nr*nc + k];//model->block->t_vector[nl*nr*nc + k];
+			   	//printf ("%f ",temp_block[nl*nr*nc + k]-273.15);
+			}
+			//printf ("%d\n",model->grid->map_mode);
+
+			// /* map the temperature numbers back	*/
+			free_dvector(model->block->t_vector);
+			model->block->t_vector = dvector(model->grid->total_n_blocks+extra_nodes);
+			//printf ("%d %d\n",model->grid->total_n_blocks,extra_nodes);
+  			xlate_temp_g2b(model->grid, model->block->t_vector, temp);
+
+			/*int x = 0;
+			for(int i=0; i<model->grid->n_layers; i++)
+			{
+				printf ("%d %d ", i, model->grid->layers[i].flp->n_units);
+				for(int j=0; j<model->grid->layers[i].flp->n_units; j++)
+				{
+
+					printf ("%f(%f) ",model->block->t_vector[x + j] - 273.15, model->grid->last_temp[x + j] - 273.15);
+				}
+				x += model->grid->layers[i].flp->n_units;
+				printf ("\n");
+			}
+			for(int i=0; i<extra_nodes; i++)
+				printf ("%f(%f) ",model->block->t_vector[model->grid->total_n_blocks + i]-273.15, model->grid->last_temp[model->grid->total_n_blocks + i] - 273.15);
+			*/
+			/*Sobhan added finish*/
+
 			// temp_first_time will hold the value of temperature for the last iteration. 
 			// printf("temp=%u\n",temp);
 			// printf("Returned compute_temp_grid\n");	
@@ -1112,8 +1823,70 @@ void compute_temp(RC_model_t *model, double *power, double *temp, double time_el
 
 				free(power_new);
 			}
-			else
-			compute_temp_grid(model->grid, power, temp, time_elapsed);		
+			else{		
+				compute_temp_grid(model->grid, power, temp, time_elapsed);	
+
+				/* Sobhan added start*/
+  				int extra_nodes;
+  				grid_model_vector_t *p;
+
+  				if (model->grid->config.model_secondary)
+    				extra_nodes = EXTRA + EXTRA_SEC;
+  				else
+    				extra_nodes = EXTRA;
+
+  				p = new_grid_model_vector(model->grid);
+
+  				/* package nodes' power numbers	*/
+  				set_internal_power_grid(model->grid, power);
+
+  				/* map the block power/temp numbers to the grid	*/
+  				xlate_vector_b2g(model->grid, power, p, V_POWER);
+
+  				/* if temp is NULL, re-use the temperature from the
+  				* last call. otherwise, translate afresh and remember 
+  				* the grid and block temperature arrays for future use
+  				*/
+  				if (temp != NULL) {
+					xlate_vector_b2g(model->grid, temp, model->grid->last_trans, V_TEMP);
+      				model->grid->last_temp = temp;
+				}
+  				int nl = model->grid->n_layers;
+  				int nr = model->grid->rows;
+  				int nc = model->grid->cols;
+  				double *power_block = dvector(nl*nr*nc+extra_nodes);
+  				double *temp_block = dvector(nl*nr*nc+extra_nodes);
+  				for(int n=0; n < nl; n++)
+					for(int i=0; i < nr; i++)
+        				for(int j=0; j < nc; j++) {
+							power_block[n*nr*nc + i*nc + j] = p->cuboid[n][i][j];
+							temp_block[n*nr*nc + i*nc + j] = model->grid->last_trans->cuboid[n][i][j];
+						}	
+				for(int k=0; k<extra_nodes; k++){
+					power_block[nl*nr*nc + k] = p->extra[k];
+					temp_block[nl*nr*nc + k] = model->grid->last_trans->extra[k];
+				}
+				fprintf(stdout, "number of units: %d\n", model->block->n_units);
+				fprintf(stdout, "number of nodes: %d\n", model->block->n_nodes);
+
+
+				compute_temp_block(model->block, power_block, temp_block, time_elapsed);
+							
+				grid_model_vector_t *temp;
+  				temp = new_grid_model_vector(model->grid);
+				for(int n=0; n < nl; n++)
+      			 	for(int i=0; i < nr; i++)
+        		 		for(int j=0; j < nc; j++)
+				 			temp->cuboid[n][i][j] = model->block->t_vector[n*nr*nc + i*nc + j];
+				for(int k=0; k<extra_nodes; k++)
+				 	temp->extra[nl*nr*nc + k] = model->block->t_vector[nl*nr*nc + k];
+			  
+				/* map the temperature numbers back	*/
+				free_dvector(model->block->t_vector);
+				model->block->t_vector = dvector(model->grid->total_n_blocks+extra_nodes);
+  				xlate_temp_g2b(model->grid, model->block->t_vector, temp);
+				/*Sobhan added finish*/
+			}	
 		}
 	else fatal("unknown model type\n");	
 }
@@ -1169,7 +1942,10 @@ void dump_temp(RC_model_t *model, double *temp, char *file)
 	if (model->type == BLOCK_MODEL)
 		dump_temp_block(model->block, temp, file);
 	else if (model->type == GRID_MODEL)	
+	{
 		dump_temp_grid(model->grid, temp, file);
+  		//dump_temp_block(model->block, model->block->t_vector, file);
+	}
 	else fatal("unknown model type\n");	
 }
 

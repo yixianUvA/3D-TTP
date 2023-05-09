@@ -97,11 +97,11 @@ typedef struct glist_t_st
 /* one layer of the grid model. a 3-D chip is a stacked
  * set of layers
  */
-typedef struct layer_t_st 
+typedef struct layer_t_st  
 {
   /* floorplan */
   flp_t *flp;
-
+ 
   /* configuration parameters	*/
   int no;				/* serial number	*/
   int has_lateral;	/* model lateral spreading of heat?	*/

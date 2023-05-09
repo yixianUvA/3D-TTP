@@ -3,7 +3,9 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNIPER = os.path.dirname(HERE)
 
-RESULTS_FOLDER = os.path.join(SNIPER, 'results')
+RESULTS_FOLDER = os.path.join(SNIPER, 'results/motivation')
+RESULTS_FOLDER = os.path.join(SNIPER, 'results1/results')
+RESULTS_FOLDER = os.path.join(SNIPER, 'ccc')
 # make sure to change the floorplans accordingly when changing number of cores and memory banks
 NUMBER_CORES_X = 2
 NUMBER_CORES_Y = 2
@@ -11,7 +13,8 @@ NUMBER_CORES_Z = 1
 NUMBER_MEM_BANKS_X = 4
 NUMBER_MEM_BANKS_Y = 4
 NUMBER_MEM_BANKS_Z = 8
-SNIPER_CONFIG = 'gainestown_3D'
+SNIPER_CONFIG = 'gainestown_3D_16core'
+#SNIPER_CONFIG = 'gainestown_3D'
 
 NUMBER_CORES = NUMBER_CORES_X * NUMBER_CORES_Y * NUMBER_CORES_Z
 

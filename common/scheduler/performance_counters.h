@@ -8,11 +8,13 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 class PerformanceCounters {
 public:
     PerformanceCounters(std::string instPowerFileName, std::string instTemperatureFileName, std::string instCPIStackFileName);
     double getPowerOfComponent (std::string component) const;
+    std::map<std::string, double> getPowerOfAllComponents () const;
     double getPowerOfCore(int coreId) const;
     double getPeakTemperature () const;
     double getTemperatureOfComponent (std::string component) const;

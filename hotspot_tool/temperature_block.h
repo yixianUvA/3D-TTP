@@ -15,7 +15,7 @@
 #define HSINK 3
 
 /* block thermal model	*/
-typedef struct block_model_t_st
+typedef struct block_model_t_st 
 {
 	/* floorplan	*/
 	flp_t *flp;
@@ -35,6 +35,11 @@ typedef struct block_model_t_st
 	double *inva;
 	/* c = inva * b	*/
 	double **c;
+
+	/* P_grid_cell = g2b_power * P_blocks	*/
+	double **g2b_power;
+	/* T_grid_cell = g2b_temp * T_blocks	*/
+	double **g2b_temp;
 
 	/* package parameters	*/
 	package_RC_t pack;

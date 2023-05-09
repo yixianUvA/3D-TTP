@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "scheduler_pinned_base.h"
+#include "thermalModel.h"
 #include "performance_counters.h"
 #include "policies/dvfspolicy.h"
 #include "policies/mappingpolicy.h"
@@ -97,6 +98,9 @@ class SchedulerOpen : public SchedulerPinnedBase {
 		int maxFrequency;
 		int frequencyStepSize;
 
+		// Thermal model
+		ThermalModel *thermalModel;
+		
 		// migration
 		MigrationPolicy *migrationPolicy = NULL;
 		long migrationEpoch;

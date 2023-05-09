@@ -109,12 +109,16 @@ combined_temperature_trace_file = sim.config.get('hotspot/log_files/combined_tem
 combined_insttemperature_trace_file = sim.config.get('hotspot/log_files/combined_insttemperature_trace_file')
 combined_power_trace_file = sim.config.get('hotspot/log_files/combined_power_trace_file')
 combined_instpower_trace_file = sim.config.get('hotspot/log_files/combined_instpower_trace_file')
+#combined_updated_instpower_trace_file = sim.config.get('hotspot/log_files/combined_updated_instpower_trace_file')
+rc_model_file =  sim.config.get('hotspot/log_files/rc_model_file')
+
 #memory related files
 hotspot_steady_temp_file = sim.config.get('hotspot/log_files_mem/steady_temp_file')
 hotspot_grid_steady_file = sim.config.get('hotspot/log_files_mem/grid_steady_file')
 hotspot_all_transient_file = sim.config.get('hotspot/log_files_mem/all_transient_file')
 power_trace_file = sim.config.get('hotspot/log_files_mem/power_trace_file')
 full_power_trace_file = sim.config.get('hotspot/log_files_mem/full_power_trace_file')
+hotspot_power_trace_file = sim.config.get('hotspot/log_files_mem/hotspot_power_trace_file')
 temperature_trace_file = sim.config.get('hotspot/log_files_mem/temperature_trace_file')
 full_temperature_trace_file = sim.config.get('hotspot/log_files_mem/full_temperature_trace_file')
 init_file = sim.config.get('hotspot/log_files_mem/init_file')
@@ -125,6 +129,7 @@ c_hotspot_grid_steady_file = sim.config.get('hotspot/log_files_core/grid_steady_
 c_hotspot_all_transient_file = sim.config.get('hotspot/log_files_core/all_transient_file')
 c_full_power_trace_file = sim.config.get('hotspot/log_files_core/full_power_trace_file')
 c_power_trace_file = sim.config.get('hotspot/log_files_core/power_trace_file')
+c_hotspot_power_trace_file = sim.config.get('hotspot/log_files_core/hotspot_power_trace_file')
 c_full_temperature_trace_file = sim.config.get('hotspot/log_files_core/full_temperature_trace_file')
 c_temperature_trace_file = sim.config.get('hotspot/log_files_core/temperature_trace_file')
 c_init_file = sim.config.get('hotspot/log_files_core/init_file')
@@ -139,6 +144,7 @@ c_init_file = sim.config.get('hotspot/log_files_core/init_file')
 hotspot_command = executable  \
                   + ' -c ' + hotspot_config_file \
                   + ' -p ' + power_trace_file \
+                  + ' -t ' + hotspot_power_trace_file \
                   + ' -o ' + temperature_trace_file \
                   + ' -model_secondary 1 -model_type grid ' \
                   + ' -steady_file ' + hotspot_steady_temp_file \
@@ -389,6 +395,7 @@ class memTherm:
      c_hotspot_args = c_executable  \
                     + ' -c '+ c_hotspot_config_file \
                     + ' -p ' + c_power_trace_file \
+                    + ' -t ' + hotspot_power_trace_file \
                     + ' -o ' + c_temperature_trace_file \
                     + ' -model_secondary 1 -model_type grid ' \
                     + ' -steady_file ' + c_hotspot_steady_temp_file \
@@ -518,16 +525,20 @@ class memTherm:
      #invoke the memory hotspot. It will include core parts automatically for 3D and 2.5D
     hcmd = hotspot_command
     hcmd += ' -v ' + vdd_string
+
     first_run = (sum(1 for linee in open(combined_temperature_trace_file, 'r')) == 1) 
     if (init_file_external!= "None") or (not first_run):
         hcmd += ' -init_file ' + init_file
+    if (first_run):
+        hcmd += ' -print_RC_model ' + rc_model_file
     os.system(hcmd)
     self.format_trace_file(True, c_temperature_trace_file, temperature_trace_file, combined_temperature_trace_file, combined_insttemperature_trace_file)
-    self.format_trace_file(True, c_power_trace_file, power_trace_file, combined_power_trace_file, combined_instpower_trace_file)
+    #self.format_trace_file(True, c_power_trace_file, power_trace_file, combined_power_trace_file, combined_instpower_trace_file)
+    self.format_trace_file(True, c_power_trace_file, hotspot_power_trace_file, combined_power_trace_file, combined_instpower_trace_file)
       #concatenate the per interval temperature trace into a single file
     os.system("cp " + hotspot_all_transient_file + " " + init_file)
     os.system("tail -1 " + temperature_trace_file + ">>" + full_temperature_trace_file)
-    os.system("tail -1 " + power_trace_file + " >>" + full_power_trace_file)
+    os.system("tail -1 " + hotspot_power_trace_file + " >>" + full_power_trace_file)
 
   def getStatsGetter(self, component, core, metric):
     # Some components don't exist (i.e. DRAM reads on cores that don't have a DRAM controller),

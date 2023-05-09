@@ -17,6 +17,7 @@ NAME_REGEX = r'results_(\d+-\d+-\d+_\d+.\d+)_([a-zA-Z0-9_\.\+]*)_((splash2|parse
 cache = diskcache.Cache(directory=os.path.join(HERE, 'cache'))
 
 
+
 def get_runs():
     for result_dir in RESULT_DIRS:
         if os.path.exists(result_dir):
@@ -49,6 +50,16 @@ def get_date(run):
     m = re.search(NAME_REGEX, run)
     return m.group(1)
 
+def get_pure_task(run):
+    m = re.search(NAME_REGEX, run)
+    taskSet = m.group(3).split('-')
+    return taskSet[1]
+
+
+def get_scheduling(run):
+    m = re.search(NAME_REGEX, run)
+    scheldule = m.group(2).split('+')
+    return scheldule[1]
 
 def get_config(run):
     m = re.search(NAME_REGEX, run)
@@ -140,6 +151,11 @@ def get_core_power_traces(run):
     traces = _get_traces(run, 'combined_power.trace')
     return traces[:count_cores(run)]
 
+def get_core_power_budget_traces(run):
+    header = _get_header(run, 'PeriodicPowerBudget.trace') 
+    assert all(h.startswith('c') for h in header[:count_cores(run)])  # simple check for order or header
+    traces = _get_traces(run, 'PeriodicPowerBudget.trace')
+    return traces[:count_cores(run)]
 
 def get_memory_power_traces(run):
     header = _get_header(run, 'combined_power.trace')
@@ -147,6 +163,16 @@ def get_memory_power_traces(run):
     traces = _get_traces(run, 'combined_power.trace')
     return traces[count_cores(run):]
 
+def get_memory_peak_temperature_traces(run, level):
+    header = _get_header(run, 'combined_temperature.trace')
+    assert all(h.startswith('B') for h in header[count_cores(run):])  # simple check for order or header
+    traces = _get_traces(run, 'combined_temperature.trace')
+    temp = traces[level*count_cores(run):(level+1)*count_cores(run)]
+    peak = []
+    for values in zip(*temp):
+        peak.append(max(values))
+    #return collections.OrderedDict((h, t) for h, t in zip(["M_L"+str(level)], [peak]))
+    return peak
 
 def get_core_temperature_traces(run):
     header = _get_header(run, 'combined_temperature.trace')
@@ -167,7 +193,7 @@ def get_core_peak_temperature_traces(run):
     peak = []
     for values in zip(*traces):
         peak.append(max(values))
-    return [peak]
+    return peak
 
 
 def get_all_temperature_traces(run):

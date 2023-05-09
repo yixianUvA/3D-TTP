@@ -1,0 +1,5 @@
+started:    2022-07-07 23:55:59
+ended:      2022-07-08 06:04:12
+duration:   6:08:12.927001
+host:       d509827f5fed
+tasks:      parsec-canneal-simsmall-3,parsec-canneal-simsmall-3,parsec-canneal-simsmall-3,parsec-canneal-simsmall-3

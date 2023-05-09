@@ -39,6 +39,32 @@ double PerformanceCounters::getPowerOfComponent (string component) const {
 	return -1;
 }
 
+/** getPowerOfAllComponents
+    Returns the power consumption of all components together with their name.
+*/
+map<string, double> PerformanceCounters::getPowerOfAllComponents () const {
+	map<string, double> instPower;
+	ifstream powerLogFile(instPowerFileName);
+	string header;
+	string footer;
+
+	if (powerLogFile.good()) {
+		getline(powerLogFile, header);
+		getline(powerLogFile, footer);
+	}
+
+	std::istringstream issHeader(header);
+	std::istringstream issFooter(footer);
+	std::string token;
+
+	while(getline(issHeader, token, '\t')) {
+		std::string value;
+		getline(issFooter, value, '\t');
+		instPower.insert(std::pair<string, double>(token,stod(value)));
+	}
+	return instPower;
+}
+
 /** getPowerOfCore
  * Return the latest total power consumption of the given core. Requires "tp" (total power) to be tracked in base.cfg. Return -1 if power is not tracked.
  */

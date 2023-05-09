@@ -1,0 +1,5 @@
+started:    2022-07-07 20:22:56
+ended:      2022-07-07 20:33:27
+duration:   0:10:30.968112
+host:       d509827f5fed
+tasks:      parsec-blackscholes-simsmall-3,parsec-blackscholes-simsmall-3,parsec-blackscholes-simsmall-3,parsec-blackscholes-simsmall-3

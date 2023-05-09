@@ -2915,7 +2915,7 @@ void slope_fn_pack(grid_model_t *model, double *v, grid_model_vector_t *p, doubl
     (x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
     (x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
   dv[nl*nr*nc + SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
-
+ 
   psum = 0.0;
   for(i=0; i < nr; i++)
     psum += (A3D(v,hsidx,i,nc-1,nl,nr,nc) - x[SINK_C_E]);
@@ -3251,6 +3251,7 @@ void slope_fn_grid(grid_model_t *model, double *v, grid_model_vector_t *p, doubl
 
 void compute_temp_grid(grid_model_t *model, double *power, double *temp, double time_elapsed)
 {
+  
   double t, h, new_h;
   int extra_nodes;
   grid_model_vector_t *p;

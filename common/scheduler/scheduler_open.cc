@@ -15,6 +15,8 @@
 
 #include "policies/dvfsConstFreq.h"
 #include "policies/dvfsOndemand.h"
+#include "policies/dvfsPB.h"
+#include "policies/dvfsDATE15.h"
 #include "policies/mapFirstUnused.h"
 
 #include <iomanip>
@@ -51,6 +53,7 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 	arrivalInterval = atoi (Sim()->getCfg()->getString("scheduler/open/arrivalInterval").c_str());
 	numberOfTasks = Sim()->getCfg()->getInt("traceinput/num_apps");
 	numberOfCores = Sim()->getConfig()->getApplicationCores();
+	double heat_trans_time = Sim()->getCfg()->getFloat("core_thermal/time");
 
 	coresInX = Sim()->getCfg()->getInt("memory/cores_in_x");
 	coresInY = Sim()->getCfg()->getInt("memory/cores_in_y");
@@ -61,6 +64,13 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
 		Sim()->getCfg()->getString("hotspot/log_files/combined_insttemperature_trace_file").c_str(),
 		"InstantaneousCPIStack.log");
 
+	//double ambientTemperature = Sim()->getCfg()->getFloat("core_thermal/ambient_temperature");
+    //double maxTemperature = Sim()->getCfg()->getFloat("core_thermal/max_temperature");
+    //double inactivePower = Sim()->getCfg()->getFloat("core_thermal/inactive_power");
+    //double tdp = Sim()->getCfg()->getFloat("core_thermal/tdp");
+	//thermalModel = new ThermalModel((unsigned int)gridLayers, (unsigned int)gridRows, (unsigned int)gridColumns, Sim()->getCfg()->getString("core_thermal/thermal_model"), ambientTemperature, maxTemperature, inactivePower, tdp);
+	thermalModel = NULL;
+	
 	//Initialize the cores in the system.
 	for (int coreIterator=0; coreIterator < numberOfCores; coreIterator++) {
 		systemCores.push_back (coreIterator);
@@ -117,8 +127,18 @@ SchedulerOpen::SchedulerOpen(ThreadManager *thread_manager)
  		exit (1);
 	}
 
+	std::fstream f;
+	f.open ("PeriodicPowerBudget.trace",std::ofstream::out);
+	f.clear();
+ 	for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++) {
+		if(coreCounter != 0)
+			f<<"	";
+		f<<"core"<<coreCounter;
+	}
+	f<<endl;
+
 	initMappingPolicy(Sim()->getCfg()->getString("scheduler/open/logic").c_str());
-	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
+	//initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
 	initMigrationPolicy(Sim()->getCfg()->getString("scheduler/open/migration/logic").c_str());
 }
 
@@ -171,8 +191,29 @@ void SchedulerOpen::initDVFSPolicy(String policyName) {
 			downThreshold,
 			dtmCriticalTemperature,
 			dtmRecoveredTemperature
-		);
-	} //else if (policyName ="XYZ") {... } //Place to instantiate a new DVFS logic. Implementation is put in "policies" package.
+		); 
+	} 
+	else if (policyName == "date15") {
+		float upThreshold = Sim()->getCfg()->getFloat("scheduler/open/dvfs/date15/up_threshold");
+		float downThreshold = Sim()->getCfg()->getFloat("scheduler/open/dvfs/date15/down_threshold");
+		float dtmCriticalTemperature = Sim()->getCfg()->getFloat("scheduler/open/dvfs/date15/dtm_cricital_temperature");
+		float dtmRecoveredTemperature = Sim()->getCfg()->getFloat("scheduler/open/dvfs/date15/dtm_recovered_temperature");
+		dvfsPolicy = new DVFSDATE15(
+			performanceCounters,
+			numberOfCores,
+			minFrequency,
+			maxFrequency,
+			frequencyStepSize,
+			upThreshold,
+			downThreshold,
+			dtmCriticalTemperature,
+			dtmRecoveredTemperature
+		); 
+	} 	
+	else if (policyName == "tsp" || policyName == "ttsp") {
+		std::string method = Sim()->getCfg()->getString("core_thermal/method").c_str();
+		dvfsPolicy = new DVFSPB(policyName.c_str(), thermalModel, performanceCounters, numberOfCores, minFrequency, maxFrequency, frequencyStepSize, method);
+	}//else if (policyName ="XYZ") {... } //Place to instantiate a new DVFS logic. Implementation is put in "policies" package.
 	else {
 		cout << "\n[Scheduler] [Error]: Unknown DVFS Algorithm" << endl;
  		exit (1);
@@ -957,7 +998,7 @@ void SchedulerOpen::executeMigrationPolicy(SubsecondTime time) {
 	}
 }
 
-
+//int cycle = 0;
 /** periodic
     This function is called periodically by Sniper at Interval of 100ns.
 */
@@ -978,18 +1019,47 @@ void SchedulerOpen::periodic(SubsecondTime time) {
 		}
 	}
 
+    if(thermalModel == NULL) 
+	{
+		ifstream file(Sim()->getCfg()->getString("core_thermal/thermal_model").c_str());
+		if(file)
+		{
+			cout << "\n[Scheduler][Thermal Model]: Thermal model is being read at " << formatTime(time) << endl;
+			double ambientTemperature = Sim()->getCfg()->getFloat("core_thermal/ambient_temperature");
+    		double maxTemperature = Sim()->getCfg()->getFloat("core_thermal/max_temperature");
+    		double inactivePower = Sim()->getCfg()->getFloat("core_thermal/inactive_power");
+    		double tdp = Sim()->getCfg()->getFloat("core_thermal/tdp");
+			double heat_trans_time = Sim()->getCfg()->getFloat("core_thermal/time");
+			thermalModel = new ThermalModel(Sim()->getCfg()->getString("core_thermal/thermal_model"), Sim()->getCfg()->getString("core_thermal/transient_temperature_file"), ambientTemperature, maxTemperature, inactivePower, tdp, heat_trans_time);
+			initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
+		}
+		/*else if(cycle == 0)
+		{	cycle++;
+			std::cout << "\nThermal model does not exist" << std::endl;
+			cout << "[Scheduler][Thermal Model]: Generating thermal model ..."<<endl;
+		}*/
+		
+	}
+
 	if ((migrationPolicy != NULL) && (time.getNS() % migrationEpoch == 0)) {
 		cout << "\n[Scheduler]: Migration invoked at " << formatTime(time) << endl;
 
 		executeMigrationPolicy(time);
 	}
 
-	if ((dvfsPolicy != NULL) && (time.getNS() % dvfsEpoch == 0)) {
+	//if ((thermalModel != NULL) && (dvfsPolicy != NULL) && (time.getNS() % dvfsEpoch == 0)) {
+	if ((dvfsPolicy != NULL) && (time.getNS() % dvfsEpoch == 0)){ //&& time.getNS()!= 1000000) {
 		cout << "\n[Scheduler]: DVFS Control Loop invoked at " << formatTime(time) << endl;
 
 		executeDVFSPolicy();
 	}
-
+	/*if(time.getNS()== 1000000){
+		for (int coreCounter = 0; coreCounter < numberOfCores; coreCounter++)
+			setFrequency(coreCounter, minFrequency);
+	}*/
+	//if(dvfsPolicy == NULL){
+	//	initDVFSPolicy(Sim()->getCfg()->getString("scheduler/open/dvfs/logic").c_str());
+	//}
 	if (time.getNS () % mappingEpoch == 0) {
 		
 		cout << "\n[Scheduler]: Scheduler Invoked at " << formatTime(time) << "\n" << endl;
