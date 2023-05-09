@@ -1,5 +1,0 @@
-started:    2022-07-06 09:18:25
-ended:      2022-07-06 11:23:39
-duration:   2:05:14.400508
-host:       210e3ef1186d
-tasks:      parsec-fluidanimate-simmedium-4,parsec-fluidanimate-simmedium-4,parsec-fluidanimate-simmedium-4

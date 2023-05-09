@@ -1,5 +1,0 @@
-started:    2022-07-23 23:06:00
-ended:      2022-07-23 23:16:52
-duration:   0:10:51.909230
-host:       74f985821afe
-tasks:      splash2-lu.ncont-small-4

@@ -1,5 +1,0 @@
-started:    2022-07-05 17:13:58
-ended:      2022-07-05 18:07:08
-duration:   0:53:10.239035
-host:       210e3ef1186d
-tasks:      parsec-blackscholes-simmedium-3,parsec-blackscholes-simmedium-3,parsec-blackscholes-simmedium-3,parsec-blackscholes-simmedium-3

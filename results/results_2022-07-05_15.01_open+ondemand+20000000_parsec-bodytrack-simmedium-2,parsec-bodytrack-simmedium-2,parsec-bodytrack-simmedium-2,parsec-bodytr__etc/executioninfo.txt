@@ -1,5 +1,0 @@
-started:    2022-07-06 03:44:55
-ended:      2022-07-06 09:18:06
-duration:   5:33:10.555382
-host:       210e3ef1186d
-tasks:      parsec-bodytrack-simmedium-2,parsec-bodytrack-simmedium-2,parsec-bodytrack-simmedium-2,parsec-bodytrack-simmedium-2
